@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Triangle</title>
+
+    <!--<script type="text/javascript" src="gl-matrix-min.js"></script>-->
+
+    <style>
+        body {
+            margin: 100px;
+        }
+    </style>
+
+    <script>
+
+       /*
+        This functions check if the WebGL  context gl
+        did throw any error and if so displays it's number.
+        Probably not neccessery as it's is dislayed in console anyway ...
+        */
+
+       function checkError(gl, msg) {
+          let info = gl.getError();
+          if (info !== gl.NO_ERROR) {
+             console.log("Error " + info + " : " + msg);
+          }
+       }
+
+       /*
+        Tak samo jak powyższa, ale zamiast wypisywać
+        komunikat na konsoli wyświetla go w okienku
+        dialogowym
+        */
+       function alertError(gl, msg) {
+          let info = gl.getError();
+          if (info !== gl.NO_ERROR) {
+             alert("Error " + info + ": " + msg);
+          }
+       }
+
+       /*
+        Tu następuje seria pomocniczych funkcji, które
+        ułatwiają napisanie programu WebGL. W każdej z nich
+        pierwszy parametr to WebGL context.
+        */
+
+       /*
+        Funkcja kompiluje kod zawarty w parametrze 'src'
+        dołaczając go do shadera 'shader'. W przypadku błędów kompilacji
+        wyświetla stosowny komunikat na konsoli.
+        */
+
+       function compileShader(gl, shader, src) {
+
+          gl.shaderSource(shader, src);
+          gl.compileShader(shader);
+
+          //Check for compilation error and display them.
+          if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+             console.log(gl.getShaderInfoLog(shader));
+             return null;
+          }
+          return shader;
+       }
+
+       /*
+        Główna funkcja tworząca program cieniujący.
+        Żródła szaderów są przekazywane za pomoca obiektu 'src'
+        jako jego pola 'vertex' i 'fragment'.
+        */
+
+       function makeProgram(gl, src) {
+          let vshader = gl.createShader(gl.VERTEX_SHADER);
+          let fshader = gl.createShader(gl.FRAGMENT_SHADER);
+
+          compileShader(gl, vshader, src.vertex);
+          compileShader(gl, fshader, src.fragment);
+
+          let program = gl.createProgram();
+
+          gl.attachShader(program, vshader);
+          gl.attachShader(program, fshader);
+
+          gl.linkProgram(program);
+          let info = gl.getProgramParameter(program, gl.LINK_STATUS);
+          if (!info) {
+             console.log("Could  not link shaders\n" + info);
+          }
+
+          return program;
+       }
+
+       /*
+        Function creating an ARRAY BUFFER and loading data into it.
+        */
+       function initBuffer(gl, data) {
+
+          let buffer = gl.createBuffer();
+
+          gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+          gl.bindBuffer(gl.ARRAY_BUFFER, null);
+          return buffer;
+       }
+
+    </script>
+</head>
+<body onload="onLoad()">
+<canvas id="canvas" width="400px" height="400px" style="border: solid thin black;"></canvas>
+
+
+<script>
+
+   /* Those two variables contain
+      the source coe for both shaders.
+    */
+   const vertex_src = `
+attribute vec4 aVertexPosition;
+
+void main() {
+    gl_Position = aVertexPosition;
+}
+`;
+
+   const fragment_src = `
+void main() {
+    gl_FragColor = vec4(0.4, 0.4, 0.4, 1);;
+}
+`;
+
+
+   //Vertex coordinates
+   const VertexCoordinates = [
+      0.5, -0.5, 0.0,       0.0, -1.0, 0.0,         1.0, -1.0, 0.0,
+      -0.5, -0.5, 0.0,      0.0, -1.0, 0.0,         -1.0, -1.0, 0.0
+   ];
+
+   function onLoad() {
+      let canvas = document.getElementById("canvas");
+      if (!canvas) alert("cannot access canvas");
+      let gl = canvas.getContext("webgl");
+      if (!gl) alert("cannot get WebGL context");
+
+      gl.viewport(0, 0, canvas.width, canvas.height);
+
+      let program = makeProgram(gl, {vertex: vertex_src, fragment: fragment_src});
+
+      let vertexBuffer = initBuffer(gl, VertexCoordinates);
+
+      // Set's the background color
+      gl.clearColor(0.75, 0.75, 0.75, 1.0);
+      // Enables the depth test.
+      gl.enable(gl.DEPTH_TEST);
+
+      //Clear canvas (fill with background color) and depth buffer.
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+      gl.useProgram(program);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+      gl.enableVertexAttribArray(gl.getAttribLocation(program, 'aVertexPosition'));
+      gl.vertexAttribPointer(gl.getAttribLocation(program, 'aVertexPosition'), 3, gl.FLOAT, false, 0, 0);
+
+      gl.drawArrays(gl.TRIANGLES, 0, VertexCoordinates.length/3);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+      gl.disableVertexAttribArray(gl.getAttribLocation(program, 'aVertexPosition'));
+
+   }
+</script>
+
+
+</body>
+</html>

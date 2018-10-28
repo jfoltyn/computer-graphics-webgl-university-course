@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Pyramid Forest WebGL2</title>
+
+    <script type="text/javascript" src="../1/gl-matrix-min.js"></script>
+
+    <style>
+        body {
+            margin: 100px;
+        }
+    </style>
+
+    <script>
+       const FOV = Math.PI / 4;
+       const ASPECT = 1;
+       const NEAR = 0.1;
+       const FAR = 100;
+
+       const CAMERA_SPEED = 5;
+
+       let timeFromBeginning = 0;
+       let previousFrame = new Date().getTime();
+    </script>
+</head>
+<body>
+<canvas id="glcanvas" width="800px" height="800px" style="border: solid thin black;"></canvas>
+
+<script>
+   let Input = {
+      _pressed: {},
+
+      LEFT: 37,
+      UP: 38,
+      RIGHT: 39,
+      DOWN: 40,
+
+      isDown: function (keyCode) {
+         return this._pressed[keyCode];
+      },
+
+      onKeydown: function (event) {
+         this._pressed[event.keyCode] = true;
+      },
+
+      onKeyup: function (event) {
+         delete this._pressed[event.keyCode];
+      }
+   };
+
+   window.addEventListener('keyup', function (event) {
+      Input.onKeyup(event);
+   }, false);
+   window.addEventListener('keydown', function (event) {
+      Input.onKeydown(event);
+   }, false);
+</script>
+
+<script>
+   "use strict";
+
+   const ATTR_POSITION_LOC = 0;
+   const ATTR_COLOR_LOC = 1;
+
+   let gl;
+   let program;
+
+   let vertices = new Float32Array([
+      -0.5, 0.0, 0.5,
+      0.5, 0.0, 0.5,
+      -0.5, 0.0, -0.5,
+      0.5, 0.0, -0.5,
+      0, 0.5, 0
+   ]);
+   let colors = new Float32Array([
+      0.658, 0.488, 0.101,
+      0.658, 0.488, 0.151,
+      0.658, 0.428, 0.101,
+      0.618, 0.488, 0.101,
+      0.956, 0.894, 0.262
+   ]);
+
+   // dane o indeksach
+   let indices = new Uint16Array([
+      0, 2, 1,  //Base
+      3, 1, 2,  //Base
+
+      0, 1, 4,  //Front
+      3, 2, 4,  //Back
+      2, 0, 4,  //Left
+      1, 3, 4   //Right
+   ]);
+
+
+   let cameraPos = {x: 0, y: 0, z: 1};
+
+   let lastLog = 0;
+
+   function init() {
+      try {
+         let canvas = document.querySelector("#glcanvas");
+         gl = canvas.getContext("webgl2");
+      }
+      catch (e) {
+      }
+
+      if (!gl) {
+         alert("Unable to initialize WebGL.");
+         return;
+      }
+
+      gl.clearColor(0.75, 0.75, 0.75, 1.0);
+      gl.enable(gl.CULL_FACE);
+      gl.enable(gl.DEPTH_TEST);
+
+      let vertex_shader = createShader(gl, gl.VERTEX_SHADER, vs_source);
+      let fragment_shader = createShader(gl, gl.FRAGMENT_SHADER, fs_source);
+      program = createProgram(gl, vertex_shader, fragment_shader);
+
+      let color_ubi = gl.getUniformBlockIndex(program, "TriangleColor");
+
+      let color_ubb = 0;
+      gl.uniformBlockBinding(program, color_ubi, color_ubb);
+
+      let vertex_buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertex_buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+      let color_buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, color_buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+      let index_buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index_buffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+
+      let vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertex_buffer);
+      gl.vertexAttribPointer(ATTR_POSITION_LOC, 3, gl.FLOAT, gl.FALSE, 3 * 4, 0);
+      gl.enableVertexAttribArray(ATTR_POSITION_LOC);
+      gl.bindBuffer(gl.ARRAY_BUFFER, color_buffer);
+      gl.vertexAttribPointer(ATTR_COLOR_LOC, 3, gl.FLOAT, gl.FALSE, 3 * 4, 0);
+      gl.enableVertexAttribArray(ATTR_COLOR_LOC);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index_buffer);
+      gl.bindVertexArray(null);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+
+      let triangle_color = new Float32Array([1.0, 1.0, 0.0, 0.0]);
+
+      let color_ubo = gl.createBuffer();
+      gl.bindBuffer(gl.UNIFORM_BUFFER, color_ubo);
+      gl.bufferData(gl.UNIFORM_BUFFER, triangle_color, gl.DYNAMIC_DRAW);
+      gl.bindBuffer(gl.UNIFORM_BUFFER, null);
+
+      gl.useProgram(program);
+      gl.bindVertexArray(vao);
+      gl.bindBufferBase(gl.UNIFORM_BUFFER, color_ubb, color_ubo);
+   }
+
+   function buildVP(cameraPosition) {
+      let perspective = mat4.create();
+      mat4.perspective(perspective, FOV, ASPECT, NEAR, FAR);
+      let view = mat4.create();
+      mat4.lookAt(view, cameraPosition, vec3.fromValues(0, 0, -1), vec3.fromValues(0, 1, 0));
+      let VP = mat4.create();
+      mat4.mul(VP, perspective, view);
+      return VP;
+   }
+
+   function buildMVP() {
+      let translation = mat4.create();
+      mat4.translate(translation, translation, [0, Math.sin(timeFromBeginning / 1000) / 3, -2]);
+      let rotation = mat4.create();
+      mat4.rotate(rotation, rotation, timeFromBeginning / 1000, [0, 1, 0]);
+      let model = mat4.create();
+      mat4.mul(model, translation, rotation);
+
+      let VP = buildVP();
+      let MVP = mat4.create();
+      mat4.mul(MVP, VP, model);
+      return MVP;
+   }
+
+   function updateCamera(Input, deltaTime, CAMERA_SPEED) {
+      if (Input.isDown(Input.UP)) {
+         console.log(cameraPos);
+         cameraPos.z -= (deltaTime / 1000) * CAMERA_SPEED;
+      }
+      if (Input.isDown(Input.DOWN)) {
+         console.log(cameraPos);
+         cameraPos.z += (deltaTime / 1000) * CAMERA_SPEED;
+      }
+      if (Input.isDown(Input.LEFT)) {
+         console.log(cameraPos);
+         cameraPos.x -= (deltaTime / 1000) * CAMERA_SPEED;
+      }
+      if (Input.isDown(Input.RIGHT)) {
+         console.log(cameraPos);
+         cameraPos.x += (deltaTime / 1000) * CAMERA_SPEED;
+      }
+   }
+
+   function draw(deltaTime) {
+      if (lastLog + 1000 < timeFromBeginning) {
+         console.log(deltaTime + 'ms');
+         lastLog = timeFromBeginning;
+      }
+
+      let uMlocation = gl.getUniformLocation(program, 'uM');
+
+      // wyczyszczenie ekranu
+      gl.clear(gl.COLOR_BUFFER_BIT);
+
+      updateCamera(Input, deltaTime, CAMERA_SPEED);
+
+      for(var i = -5; i < 5; i++){
+         for(var j = -5; j < 5; j++) {
+            for (var y = 0; y < 2; y++) {
+               var modelY = y === 0? -1 : 0;
+               var modelUpsideDown = y === 0? 0 : Math.PI;
+
+               /////////Model transformations////////
+               let translation = mat4.create();
+               mat4.translate(translation, translation, [i * 1.5, modelY, j * 1.5]);
+               let rotation = mat4.create();
+               mat4.rotate(rotation, rotation, modelUpsideDown, [1, 0, 0]);
+               let model = mat4.create();
+               mat4.mul(model, translation, rotation);
+               /////////Model transformations////////
+
+
+               ////////Building camera///////////////
+               let VP = buildVP(vec3.fromValues(cameraPos.x, cameraPos.y, cameraPos.z));
+               ////////Building camera///////////////
+
+               let MVP = mat4.create();
+               mat4.mul(MVP, VP, model);
+               gl.uniformMatrix4fv(uMlocation, false, MVP);
+
+               gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0);
+            }
+         }
+      }
+
+      window.requestAnimationFrame(function () {
+         let currentFrame = new Date().getTime();
+         let currentDeltaTime = currentFrame - previousFrame;
+         timeFromBeginning += currentDeltaTime;
+         previousFrame = currentFrame;
+         draw(currentDeltaTime);
+      });
+   }
+
+   function main() {
+      init();
+      draw();
+   }
+
+   function createShader(gl, type, source) {
+      let shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      let success = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
+      if (success) {
+         return shader;
+      }
+
+      console.log(gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
+   }
+
+   function createProgram(gl, vertex_shader, fragment_shader) {
+      let program = gl.createProgram();
+      gl.attachShader(program, vertex_shader);
+      gl.attachShader(program, fragment_shader);
+      gl.linkProgram(program);
+      let success = gl.getProgramParameter(program, gl.LINK_STATUS);
+      if (success) {
+         return program;
+      }
+
+      console.log(gl.getProgramInfoLog(program));
+      gl.deleteProgram(program);
+   }
+
+   // vertex shader (GLSL)
+   // `location` musi byc takie same jak po stronie CPU!!!
+   let vs_source = `#version 300 es
+    layout(location = 0) in vec3 vertex_position;
+    layout(location = 1) in vec3 vertex_color;
+
+    uniform mat4 uM;
+
+    out vec3 color;
+
+    void main()
+    {
+        color = vertex_color;
+        gl_Position = uM * vec4(vertex_position, 1);
+    }
+`;
+
+   // fragment shader (GLSL)
+   // fs nie ma domyślnej precyzji dla liczb zmiennoprzecinkowych więc musimy wybrać ją sami
+   let fs_source = `#version 300 es
+    precision mediump float;
+
+    in vec3 color;
+    out vec4 final_color;
+
+    void main()
+    {
+
+        final_color = vec4(color, 1);
+    }
+`;
+
+   main();
+</script>
+
+
+</body>
+</html>

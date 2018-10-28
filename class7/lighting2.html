@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Diffuse + Attenuation + Specular lighting</title>
+
+    <script type="text/javascript" src="../1/gl-matrix-min.js"></script>
+
+    <style>
+        body {
+            margin: 100px;
+        }
+    </style>
+
+    <script>
+       const FOV = Math.PI / 4;
+       const ASPECT = 1;
+       const NEAR = 0.1;
+       const FAR = 100;
+
+       const CAMERA_SPEED = 5;
+
+       let timeFromBeginning = 0;
+       let previousFrame = new Date().getTime();
+    </script>
+</head>
+<body>
+<canvas id="glcanvas" width="800px" height="800px" style="border: solid thin black;"></canvas>
+<script>
+   function createShader(gl, type, source) {
+      let shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      let success = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
+      if (success) {
+         return shader;
+      }
+
+      console.log(gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
+   }
+
+   function createProgram(gl, vertex_shader, fragment_shader) {
+      let program = gl.createProgram();
+      gl.attachShader(program, vertex_shader);
+      gl.attachShader(program, fragment_shader);
+      gl.linkProgram(program);
+      let success = gl.getProgramParameter(program, gl.LINK_STATUS);
+      if (success) {
+         return program;
+      }
+
+      console.log(gl.getProgramInfoLog(program));
+      gl.deleteProgram(program);
+   }
+</script>
+<script>
+   let Input = {
+      _pressed: {},
+
+      LEFT: 37,
+      UP: 38,
+      RIGHT: 39,
+      DOWN: 40,
+
+      isDown: function (keyCode) {
+         return this._pressed[keyCode];
+      },
+
+      onKeydown: function (event) {
+         this._pressed[event.keyCode] = true;
+      },
+
+      onKeyup: function (event) {
+         delete this._pressed[event.keyCode];
+      }
+   };
+
+   window.addEventListener('keyup', function (event) {
+      Input.onKeyup(event);
+   }, false);
+   window.addEventListener('keydown', function (event) {
+      Input.onKeydown(event);
+   }, false);
+</script>
+
+<script>
+   "use strict";
+
+   const ATTR_POSITION_LOC = 0;
+   const ATTR_UV_LOC = 1;
+   const ATTR_NORMAL_LOC = 2;
+
+   let gl;
+   let program;
+
+   const image = new Image();
+
+   let vertices = new Float32Array([
+      -0.5, 0.0, 0.5,
+      0.5, 0.0, 0.5,
+      -0.5, 0.0, -0.5,
+      0.5, 0.0, -0.5,
+      0, 0.5, 0
+   ]);
+
+   let uvs = new Float32Array([
+      0.0, 0.0,
+      1.0, 0.0,
+      0.0, 0.0,
+      1.0, 0.0,
+      0.5, 1
+   ]);
+
+   let normals = new Float32Array([
+      0.0, 1.0, 0.0,
+      0.0, 1.0, 0.0,
+      0.0, 1.0, 0.0,
+      0.0, 1.0, 0.0,
+      0.0, 1.0, 0.0,
+   ]);
+
+   // dane o indeksach
+   let indices = new Uint16Array([
+      0, 1, 2,   //Base
+      1, 3, 2,   //Base
+   ]);
+
+
+   let cameraPos = {x: 0, y: 0, z: 1};
+   let lastLog = 0;
+
+   function init() {
+      try {
+         let canvas = document.querySelector("#glcanvas");
+         gl = canvas.getContext("webgl2");
+      }
+      catch (e) {
+      }
+
+      if (!gl) {
+         alert("Unable to initialize WebGL.");
+         return;
+      }
+
+      gl.clearColor(0.75, 0.75, 0.75, 1.0);
+      gl.enable(gl.CULL_FACE);
+      gl.enable(gl.DEPTH_TEST);
+
+      let vertex_shader = createShader(gl, gl.VERTEX_SHADER, vs_source);
+      let fragment_shader = createShader(gl, gl.FRAGMENT_SHADER, fs_source);
+      program = createProgram(gl, vertex_shader, fragment_shader);
+
+      let vertex_buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertex_buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+      let uvBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, uvBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+      let normalBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, normals, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+      let index_buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index_buffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+
+      let brickTexture = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, brickTexture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+      gl.generateMipmap(gl.TEXTURE_2D);
+
+      let vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertex_buffer);
+      gl.vertexAttribPointer(ATTR_POSITION_LOC, 3, gl.FLOAT, gl.FALSE, 0, 0);
+      gl.enableVertexAttribArray(ATTR_POSITION_LOC);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, uvBuffer);
+      gl.vertexAttribPointer(ATTR_UV_LOC, 2, gl.FLOAT, gl.FALSE, 0, 0);
+      gl.enableVertexAttribArray(ATTR_UV_LOC);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
+      gl.vertexAttribPointer(ATTR_NORMAL_LOC, 3, gl.FLOAT, gl.FALSE, 0, 0);
+      gl.enableVertexAttribArray(ATTR_NORMAL_LOC);
+
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index_buffer);
+
+      gl.bindVertexArray(null);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+
+      let triangle_color = new Float32Array([1.0, 1.0, 0.0, 0.0]);
+
+      let color_ubo = gl.createBuffer();
+      gl.bindBuffer(gl.UNIFORM_BUFFER, color_ubo);
+      gl.bufferData(gl.UNIFORM_BUFFER, triangle_color, gl.DYNAMIC_DRAW);
+      gl.bindBuffer(gl.UNIFORM_BUFFER, null);
+
+      gl.useProgram(program);
+      gl.bindVertexArray(vao);
+
+   }
+
+   function getMatrixP() {
+      let perspective = mat4.create();
+      mat4.perspective(perspective, FOV, ASPECT, NEAR, FAR);
+      return perspective;
+   }
+
+   function getMatrixV(cameraPosition) {
+      let view = mat4.create();
+      mat4.lookAt(view, cameraPosition, vec3.fromValues(0, 0.2, -2), vec3.fromValues(0, 1, 0));
+      return view;
+   }
+
+   function updateCamera(Input, deltaTime, CAMERA_SPEED) {
+      if (Input.isDown(Input.UP)) {
+         console.log(cameraPos);
+         cameraPos.y += (deltaTime / 1000) * CAMERA_SPEED;
+      }
+      if (Input.isDown(Input.DOWN)) {
+         console.log(cameraPos);
+         cameraPos.y -= (deltaTime / 1000) * CAMERA_SPEED;
+      }
+      if (Input.isDown(Input.LEFT)) {
+         console.log(cameraPos);
+         cameraPos.x -= (deltaTime / 1000) * CAMERA_SPEED;
+      }
+      if (Input.isDown(Input.RIGHT)) {
+         console.log(cameraPos);
+         cameraPos.x += (deltaTime / 1000) * CAMERA_SPEED;
+      }
+   }
+
+   function draw(deltaTime) {
+      if (lastLog + 1000 < timeFromBeginning) {
+         console.log(deltaTime + 'ms');
+         lastLog = timeFromBeginning;
+      }
+
+      let uMVPlocation = gl.getUniformLocation(program, 'uMVP');
+      let uMVLocation = gl.getUniformLocation(program, 'uMV');
+      let uNormalLocation = gl.getUniformLocation(program, 'uNormal');
+
+      gl.clear(gl.COLOR_BUFFER_BIT);
+
+      /////////Camera stuff//////////////////
+      updateCamera(Input, deltaTime, CAMERA_SPEED);
+      let uCameraPositionLocation = gl.getUniformLocation(program, 'uCameraPosition');
+      gl.uniform3fv(uCameraPositionLocation, [cameraPos.x, cameraPos.y, cameraPos.z]);
+      /////////Camera stuff//////////////////
+
+      let matrixP = getMatrixP();
+      let matrixView = getMatrixV(vec3.fromValues(cameraPos.x, cameraPos.y, cameraPos.z));
+
+      /////////Model transformations////////
+      let matrixModel = mat4.create();
+      mat4.translate(matrixModel, matrixModel, [0, -0.2, -2]);
+      mat4.rotate(matrixModel, matrixModel, 0, [1, 0, 0]);
+      /////////Model transformations////////
+
+      ////////Normals Stuff/////////////////
+      let MV = mat4.create();
+      mat4.mul(MV, matrixView, matrixModel);
+      gl.uniformMatrix4fv(uMVLocation, false, MV);
+
+      let matrixNormal = mat3.create();
+      mat3.normalFromMat4(matrixNormal, MV);
+      gl.uniformMatrix3fv(uNormalLocation, false, matrixNormal);
+      ////////Normals Stuff/////////////////
+
+      /////////Light////////////////////////
+      let lightPos = vec3.fromValues(0, 0.6 * (Math.sin(timeFromBeginning / 1000) + 0.8), -2);
+      vec3.transformMat4(lightPos, lightPos, matrixView);
+
+      let uLightPositionLocation = gl.getUniformLocation(program, 'uLightPosition');
+      gl.uniform3fv(uLightPositionLocation, lightPos);
+
+      let uLightAmbientLocation = gl.getUniformLocation(program, 'uLightAmbient');
+      gl.uniform1f(uLightAmbientLocation, 0.1);
+
+      let materialShininessLocation = gl.getUniformLocation(program, 'uMaterialShininess');
+      gl.uniform1f(materialShininessLocation, 30.0);
+
+      let uLightRadiusLocation = gl.getUniformLocation(program, 'uLightRadius');
+      gl.uniform1f(uLightRadiusLocation, 1.0);
+      /////////Light////////////////////////
+
+      let MVP = mat4.create();
+      mat4.mul(MVP, matrixP, MV);
+      gl.uniformMatrix4fv(uMVPlocation, false, MVP);
+
+      gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0);
+
+
+      window.requestAnimationFrame(function () {
+         let currentFrame = new Date().getTime();
+         let currentDeltaTime = currentFrame - previousFrame;
+         timeFromBeginning += currentDeltaTime;
+         previousFrame = currentFrame;
+         draw(currentDeltaTime);
+      });
+   }
+
+   function loadAssets(onLoad) {
+      image.onload = onLoad;
+      image.src = 'assets/yellow_tileable_brick_wall_texture.jpg';
+   }
+
+   function main() {
+      init();
+      draw();
+   }
+
+   // vertex shader (GLSL)
+   let vs_source = `#version 300 es
+    layout(location = 0) in vec3 vertex_position;
+    layout(location = 1) in vec2 vertex_uv;
+    layout(location = 2) in vec3 vertex_normal;
+
+    uniform mat4 uMVP;
+
+    uniform mat4 uMV;
+    uniform mat3 uNormal;
+
+    out vec2 uv;
+    out vec3 vertexCoordinates;
+    out vec3 transformedNormal;
+
+    void main()
+    {
+        uv = vertex_uv;
+        vertexCoordinates = (uMV*vec4(vertex_position, 1)).xyz;
+        transformedNormal = uNormal*vertex_normal;
+
+        gl_Position = uMVP * vec4(vertex_position, 1);
+    }
+`;
+
+   // fragment shader (GLSL)
+   let fs_source = `#version 300 es
+    precision mediump float;
+
+    uniform vec3 uCameraPosition;
+
+    uniform sampler2D u_texture;
+    uniform vec3 uLightPosition;
+    uniform float uLightRadius;
+    uniform float uLightAmbient;
+    uniform float uMaterialShininess;
+
+    in vec2 uv;
+    in vec3 vertexCoordinates;
+    in vec3 transformedNormal;
+
+    out vec4 final_color;
+
+    void main()
+    {
+        vec3 surfaceToCamera = normalize(uCameraPosition-vertexCoordinates);
+        vec3 surfaceToLight = uLightPosition-vertexCoordinates;
+        float distance = length(surfaceToLight);
+
+        float attenuation = clamp(1.0 - distance*distance/(uLightRadius*uLightRadius), 0.0, 1.0);
+        attenuation *= attenuation;
+
+        vec3 ambient = uLightAmbient * texture(u_texture, uv).rgb;
+
+        surfaceToLight = normalize( surfaceToLight );
+
+        vec3 n = normalize(transformedNormal);
+        float diffuseCoefficient = max(0.0, dot(n, surfaceToLight));
+        vec3 diffuse = diffuseCoefficient * texture(u_texture, uv).rgb;
+
+        float specularCoefficient = 0.0;
+        if(diffuseCoefficient > 0.0)
+            specularCoefficient = pow(max(0.0, dot(surfaceToCamera, reflect(-surfaceToLight, transformedNormal))), uMaterialShininess);
+        vec3 specular = specularCoefficient * vec3(1.0, 1.0, 1.0);
+
+
+        final_color.a = 1.0;
+        //////////DEMO///////////
+
+//        final_color.rgb = ambient;// AMBIENT
+//        final_color.rgb = diffuse;// DIFFUSE
+//        final_color.rgb = attenuation * diffuse;// DIFFUSE + ATTENUATION
+//        final_color.rgb = specular;// SPECULAR
+        final_color.rgb = ambient + attenuation * (diffuse + specular);// COMBINED
+
+
+        ////////GAMMA//////////
+        vec3 gamma = vec3(1.0/2.2);
+        final_color.rgb = pow(final_color.rgb, gamma);
+    }
+`;
+
+   loadAssets(main);
+</script>
+
+
+</body>
+</html>
